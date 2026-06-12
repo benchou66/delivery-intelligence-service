@@ -121,7 +121,7 @@ function E({ o, k }) {
       spellCheck={false}
       onClick={e => e.stopPropagation()}
       onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
-      onBlur={e => save(PATHS.get(o) + "." + k, e.currentTarget.innerText.replace(/\s+$/, ""))}
+      onBlur={e => save(PATHS.get(o) + "." + k, e.currentTarget.innerText.replace(/[\r\n]+$/, ""))}
     >{val}</span>
   );
 }
@@ -252,7 +252,7 @@ function Overview() {
         {o.modules.items.map(m => (
           <Card key={m.id} accent={COL(m.color)}>
             <div style={{ fontSize: 22, marginBottom: 10 }}>{m.icon}</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 2 }}>模組 <E o={m} k="id" /></div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 2 }}><E o={m} k="cardLabel" /></div>
             <div style={{ fontSize: 16, fontWeight: 600, color: C.navy, marginBottom: 2 }}><E o={m} k="name" /></div>
             <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}><E o={m} k="eng" /></div>
             <p style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.65, margin: "0 0 12px" }}><E o={m} k="desc" /></p>
@@ -334,11 +334,11 @@ function ModuleA() {
           <Card key={cfg.tier} accent={COL(cfg.accent)} highlight={cfg.highlight}>
             {cfg.badge && <div style={{ background: COL(cfg.accent), color: "#fff", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, display: "inline-block", marginBottom: 10 }}><E o={cfg} k="badge" /></div>}
             <div style={{ fontSize: 15, fontWeight: 700, color: C.navy, marginBottom: 2 }}><E o={cfg} k="tier" /></div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}>適用：<E o={cfg} k="forSize" /></div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}><E o={a.hardware} k="forLabel" /><E o={cfg} k="forSize" /></div>
             <div style={{ fontSize: 14, fontWeight: 600, color: COL(cfg.accent), marginBottom: 14 }}><E o={cfg} k="price" /></div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 6 }}>硬體配置</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 6 }}><E o={a.hardware} k="hwTitle" /></div>
             {cfg.hw.map((h, i) => <div key={i} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>· <E o={cfg.hw} k={i} /></div>)}
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, margin: "10px 0 6px" }}>軟體 Stack</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, margin: "10px 0 6px" }}><E o={a.hardware} k="swTitle" /></div>
             {cfg.sw.map((s, i) => <div key={i} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>· <E o={cfg.sw} k={i} /></div>)}
           </Card>
         ))}
@@ -414,7 +414,7 @@ function ModuleB() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
         {b.ops.steps.map(s => (
           <div key={s.step} style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px" }}>
-            <div style={{ width: 28, height: 28, background: COL(s.color), borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{s.step}</div>
+            <div style={{ width: 28, height: 28, background: COL(s.color), borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, marginBottom: 10 }}><E o={s} k="step" /></div>
             <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 6 }}><E o={s} k="title" /></div>
             <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.65 }}><E o={s} k="desc" /></div>
           </div>
@@ -469,7 +469,7 @@ function ModuleC() {
         {m.clauses.items.map(c => (
           <Card key={c.num} accent={COL(c.color)}>
             <div style={{ display: "flex", gap: 12 }}>
-              <div style={{ width: 28, height: 28, background: COL(c.color), borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, flexShrink: 0, marginTop: 2 }}>{c.num}</div>
+              <div style={{ width: 28, height: 28, background: COL(c.color), borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, flexShrink: 0, marginTop: 2 }}><E o={c} k="num" /></div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 5 }}><E o={c} k="title" /></div>
                 <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.65 }}><E o={c} k="desc" /></div>

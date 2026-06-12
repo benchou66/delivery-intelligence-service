@@ -65,7 +65,7 @@ const CONTENT = {
     "hero": {
       "badge": "商業化服務規格 v2.0",
       "year": "2026 年版",
-      "titlePre": "Delivery",
+      "titlePre": "Delivery ",
       "titleHighlight": "Intelligence",
       "titlePost": " Service",
       "desc": "整合 AI LLM Wiki 知識答詢、DevOps CI/CD Agentic 流水線、以及 FDE AI落地師現場部署，形成一套可持續交付企業智慧的端對端 AI 落地服務體系。",
@@ -112,6 +112,7 @@ const CONTENT = {
       "items": [
         {
           "id": "A",
+          "cardLabel": "模組 A",
           "icon": "📚",
           "name": "AI LLM Wiki",
           "eng": "Knowledge Intelligence",
@@ -126,6 +127,7 @@ const CONTENT = {
         },
         {
           "id": "B",
+          "cardLabel": "模組 B",
           "icon": "⚙️",
           "name": "DevOps CI/CD",
           "eng": "Agentic Development Pipeline",
@@ -139,7 +141,8 @@ const CONTENT = {
           ]
         },
         {
-          "id": "服務",
+          "id": "C",
+          "cardLabel": "服務",
           "icon": "👤",
           "name": "FDE AI落地師",
           "eng": "Forward Deployment Engineer",
@@ -364,6 +367,9 @@ const CONTENT = {
         "title": "地端部署推薦配置",
         "sub": "根據企業規模和使用人數，提供三種硬體配置方案。所有方案均支援後期升級擴充。"
       },
+      "forLabel": "適用：",
+      "hwTitle": "硬體配置",
+      "swTitle": "軟體 Stack",
       "configs": [
         {
           "tier": "輕量方案",
