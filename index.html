@@ -10,11 +10,15 @@
   body { font-family: system-ui, -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; }
   * { box-sizing: border-box; }
   #root { min-height: 100vh; }
+  /* 編輯模式：可編輯文字的視覺提示 */
+  .dis-edit { cursor: text; border-radius: 3px; transition: background .12s, box-shadow .12s; }
+  .dis-edit:hover { background: rgba(29,111,232,.10); box-shadow: 0 0 0 2px rgba(29,111,232,.25); }
+  .dis-edit:focus { outline: none; background: #FFF9E0; box-shadow: 0 0 0 2px #1D6FE8; }
 </style>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<!-- ▼ 所有文字內容都在 content.js，要改字請改那個檔，不用動這個檔 ▼ -->
+<!-- ▼ 所有文字內容都在 content.js；也可直接在網頁右下角開「編輯模式」點字修改 ▼ -->
 <script src="content.js"></script>
 </head>
 <body>
@@ -22,7 +26,105 @@
 
 <script type="text/babel" data-presets="react">
 const { useState } = React;
-const D = window.CONTENT;   // ← 內容資料（來自 content.js）
+
+/* ═══ 內容載入與編輯基礎設施 ═══════════════════════════════════════════════
+   PRISTINE  = content.js 的原始內容（不動）
+   D         = 工作中內容 = 原始內容 + 此瀏覽器儲存的修改（localStorage）
+   PATHS     = 每個物件對應的路徑（如 "overview.hero"），存檔/匯出時用
+══════════════════════════════════════════════════════════════════════════ */
+const LS_KEY = "dis-edits";
+const PRISTINE = window.CONTENT;
+const D = JSON.parse(JSON.stringify(PRISTINE));
+
+function getByPath(obj, path) {
+  return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
+}
+function setByPath(obj, path, val) {
+  const parts = path.split(".");
+  let o = obj;
+  for (let i = 0; i < parts.length - 1; i++) { o = o == null ? o : o[parts[i]]; }
+  if (o == null) return false;
+  const last = parts[parts.length - 1];
+  if (typeof o[last] !== "string") return false;
+  o[last] = val;
+  return true;
+}
+
+let OVERRIDES = {};
+try { OVERRIDES = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { OVERRIDES = {}; }
+Object.entries(OVERRIDES).forEach(([p, v]) => { if (!setByPath(D, p, v)) delete OVERRIDES[p]; });
+
+const PATHS = new WeakMap();
+(function tagPaths(node, path) {
+  if (node && typeof node === "object") {
+    PATHS.set(node, path);
+    Object.keys(node).forEach(k => tagPaths(node[k], path ? path + "." + k : k));
+  }
+})(D, "");
+
+function persistEdit(path, text) {
+  if (!setByPath(D, path, text)) return;
+  const original = getByPath(PRISTINE, path);
+  if (original === text) delete OVERRIDES[path];
+  else OVERRIDES[path] = text;
+  try { localStorage.setItem(LS_KEY, JSON.stringify(OVERRIDES)); } catch (e) {}
+}
+
+function exportContentJs() {
+  const header = [
+    "/* ════════════════════════════════════════════════════════════════════════",
+    "   Delivery Intelligence Service — 內容資料檔（由網頁「編輯模式」匯出）",
+    "   ════════════════════════════════════════════════════════════════════════",
+    "",
+    "   ▍這個檔案是什麼？",
+    "     · 網站上所有顯示的文字、價格、數據都在這裡。",
+    "     · 此檔由網頁編輯模式自動產生；含完整教學註解的原始版本可在",
+    "       GitHub 的檔案歷史（History）中找到。",
+    "",
+    "   ▍怎麼讓修改上線？",
+    "     · 把這個檔上傳到 GitHub 取代原本的 content.js：",
+    "       https://github.com/benchou66/delivery-intelligence-service/upload/main",
+    "     · 或用 git：git add content.js && git commit -m \"更新內容\" && git push",
+    "     · 上傳成功後，記得回網頁編輯模式按「還原」，清除瀏覽器暫存的修改。",
+    "",
+    "   ▍手動修改規則",
+    "     1. 文字要包在成對引號裡，2. 行尾逗號要保留，",
+    "     3. 文字內要用引號請用「」或 '，避免和外層引號打架。",
+    "   ════════════════════════════════════════════════════════════════════════ */",
+    "",
+    "const CONTENT = ",
+  ].join("\n");
+  const body = JSON.stringify(D, null, 2);
+  const footer = ";\n\n// 讓網頁讀得到上面的內容（這行請勿刪改）\nif (typeof window !== \"undefined\") window.CONTENT = CONTENT;\n";
+  const blob = new Blob([header + body + footer], { type: "text/javascript;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "content.js";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ═══ 可編輯文字元件 ═══════════════════════════════════════════════════════
+   <E o={物件} k="欄位"/>：非編輯模式 → 純文字；編輯模式 → 點擊即可修改。
+══════════════════════════════════════════════════════════════════════════ */
+const EditCtx = React.createContext({ on: false, save: () => {} });
+
+function E({ o, k }) {
+  const { on, save } = React.useContext(EditCtx);
+  const val = o[k];
+  if (!on) return <React.Fragment>{val}</React.Fragment>;
+  return (
+    <span
+      className="dis-edit"
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck={false}
+      onClick={e => e.stopPropagation()}
+      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
+      onBlur={e => save(PATHS.get(o) + "." + k, e.currentTarget.innerText.replace(/\s+$/, ""))}
+    >{val}</span>
+  );
+}
 
 // ─── Color tokens（設計用色票；一般不需更動）─────────────────────────────
 const C = {
@@ -35,7 +137,6 @@ const C = {
   gray400: "#888780", gray600: "#5F5E5A",
   text: "#1A1A1A", textMid: "#444", textMuted: "#666", border: "#E2E0D8",
 };
-// 把 content.js 裡的顏色代號（如 "blue"、"tealPale"）換成實際色碼；若已是色碼則原樣回傳
 const COL = (k) => (k in C ? C[k] : k);
 
 // ─── Shared UI ──────────────────────────────────────────────────────────────
@@ -61,6 +162,15 @@ const SectionHeader = ({ label, title, sub }) => (
   </div>
 );
 
+// 可編輯版 SectionHeader：h = content.js 裡含 label/title/sub 的物件
+const SH = ({ h }) => (
+  <SectionHeader
+    label={<E o={h} k="label" />}
+    title={<E o={h} k="title" />}
+    sub={h.sub ? <E o={h} k="sub" /> : null}
+  />
+);
+
 const Card = ({ children, accent, style = {}, highlight }) => (
   <div style={{
     background: "#fff", border: `1px solid ${highlight ? C.blueMid : C.border}`,
@@ -78,6 +188,11 @@ const StatCard = ({ num, unit, label, color = C.blue }) => (
     <div style={{ fontSize: 26, fontWeight: 700, color, lineHeight: 1 }}>{num}<span style={{ fontSize: 14, fontWeight: 400, color: C.textMuted, marginLeft: 2 }}>{unit}</span></div>
     <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{label}</div>
   </div>
+);
+
+// 可編輯版 StatCard：s = 含 num/unit/label/color 的物件
+const Stat = ({ s }) => (
+  <StatCard num={<E o={s} k="num" />} unit={s.unit ? <E o={s} k="unit" /> : ""} label={<E o={s} k="label" />} color={COL(s.color)} />
 );
 
 const Pill = ({ children, color = "blue" }) => {
@@ -99,7 +214,7 @@ function Nav({ active, setActive }) {
             padding: "12px 14px", fontSize: 12.5, fontWeight: active === s.id ? 600 : 400,
             color: active === s.id ? C.navy : C.textMuted, cursor: "pointer", whiteSpace: "nowrap"
           }}>
-            {s.label}
+            <E o={s} k="label" />
           </button>
         ))}
       </div>
@@ -114,60 +229,60 @@ function Overview() {
     <div>
       <div style={{ background: `linear-gradient(135deg, ${C.navy} 0%, ${C.navyMid} 60%, ${C.navyLight} 100%)`, borderRadius: 14, padding: "36px 36px 32px", marginBottom: 32, color: "#fff" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-          <Tag color="blue">{o.hero.badge}</Tag>
-          <span style={{ background: "rgba(255,255,255,.12)", color: "rgba(255,255,255,.85)", fontSize: 11, padding: "3px 10px", borderRadius: 20 }}>{o.hero.year}</span>
+          <Tag color="blue"><E o={o.hero} k="badge" /></Tag>
+          <span style={{ background: "rgba(255,255,255,.12)", color: "rgba(255,255,255,.85)", fontSize: 11, padding: "3px 10px", borderRadius: 20 }}><E o={o.hero} k="year" /></span>
         </div>
         <h1 style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.2, margin: "0 0 10px", letterSpacing: "-.01em" }}>
-          {o.hero.titlePre}<span style={{ color: "#5BC4E8" }}>{o.hero.titleHighlight}</span>{o.hero.titlePost}
+          <E o={o.hero} k="titlePre" /><span style={{ color: "#5BC4E8" }}><E o={o.hero} k="titleHighlight" /></span><E o={o.hero} k="titlePost" />
         </h1>
-        <p style={{ fontSize: 15, color: "rgba(255,255,255,.75)", lineHeight: 1.65, maxWidth: 560, margin: "0 0 20px" }}>{o.hero.desc}</p>
+        <p style={{ fontSize: 15, color: "rgba(255,255,255,.75)", lineHeight: 1.65, maxWidth: 560, margin: "0 0 20px" }}><E o={o.hero} k="desc" /></p>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {o.hero.chips.map(t => (
-            <span key={t} style={{ background: "rgba(255,255,255,.12)", color: "rgba(255,255,255,.85)", fontSize: 12, padding: "4px 12px", borderRadius: 20, border: "1px solid rgba(255,255,255,.2)" }}>{t}</span>
+          {o.hero.chips.map((t, i) => (
+            <span key={i} style={{ background: "rgba(255,255,255,.12)", color: "rgba(255,255,255,.85)", fontSize: 12, padding: "4px 12px", borderRadius: 20, border: "1px solid rgba(255,255,255,.2)" }}><E o={o.hero.chips} k={i} /></span>
           ))}
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 32 }}>
-        {o.stats.map(s => <StatCard key={s.label} num={s.num} unit={s.unit} label={s.label} color={COL(s.color)} />)}
+        {o.stats.map((s, i) => <Stat key={i} s={s} />)}
       </div>
 
-      <SectionHeader {...o.modules.header} />
+      <SH h={o.modules.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 32 }}>
         {o.modules.items.map(m => (
           <Card key={m.id} accent={COL(m.color)}>
             <div style={{ fontSize: 22, marginBottom: 10 }}>{m.icon}</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 2 }}>模組 {m.id}</div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: C.navy, marginBottom: 2 }}>{m.name}</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{m.eng}</div>
-            <p style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.65, margin: "0 0 12px" }}>{m.desc}</p>
-            <div>{m.tags.map(t => <Pill key={t} color={m.color}>{t}</Pill>)}</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 2 }}>模組 <E o={m} k="id" /></div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: C.navy, marginBottom: 2 }}><E o={m} k="name" /></div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}><E o={m} k="eng" /></div>
+            <p style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.65, margin: "0 0 12px" }}><E o={m} k="desc" /></p>
+            <div>{m.tags.map((t, i) => <Pill key={i} color={m.color}><E o={m.tags} k={i} /></Pill>)}</div>
           </Card>
         ))}
       </div>
 
-      <SectionHeader {...o.positioning.header} />
+      <SH h={o.positioning.header} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 32 }}>
         {o.positioning.cols.map(col => (
           <div key={col.label} style={{ background: col.ok ? C.tealPale : C.gray50, border: `1px solid ${col.ok ? C.tealLight : C.border}`, borderRadius: 12, padding: "18px 20px" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: col.ok ? "#0F6E56" : C.textMuted, marginBottom: 12 }}>{col.ok ? "✓ " : ""}{col.label}</div>
-            {col.items.map(i => (
+            <div style={{ fontSize: 13, fontWeight: 600, color: col.ok ? "#0F6E56" : C.textMuted, marginBottom: 12 }}>{col.ok ? "✓ " : ""}<E o={col} k="label" /></div>
+            {col.items.map((it, i) => (
               <div key={i} style={{ fontSize: 13, color: col.ok ? "#085041" : C.textMuted, lineHeight: 1.7, display: "flex", gap: 8 }}>
-                <span style={{ color: col.ok ? C.teal : C.gray400, flexShrink: 0 }}>{col.ok ? "◆" : "·"}</span>{i}
+                <span style={{ color: col.ok ? C.teal : C.gray400, flexShrink: 0 }}>{col.ok ? "◆" : "·"}</span><E o={col.items} k={i} />
               </div>
             ))}
           </div>
         ))}
       </div>
 
-      <SectionHeader {...o.customers.header} />
+      <SH h={o.customers.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {o.customers.items.map(c => (
           <Card key={c.name} style={{ padding: "16px 18px" }}>
             <div style={{ fontSize: 20, marginBottom: 8 }}>{c.icon}</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 3 }}>{c.name}</div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 8 }}>{c.desc}</div>
-            <div>{c.tags.map(t => <Pill key={t} color={c.color}>{t}</Pill>)}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 3 }}><E o={c} k="name" /></div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 8 }}><E o={c} k="desc" /></div>
+            <div>{c.tags.map((t, i) => <Pill key={i} color={c.color}><E o={c.tags} k={i} /></Pill>)}</div>
           </Card>
         ))}
       </div>
@@ -182,9 +297,9 @@ function ModuleA() {
   const layer = a.layers[activeLayer];
   return (
     <div>
-      <SectionHeader {...a.header} />
+      <SH h={a.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 28 }}>
-        {a.stats.map(s => <StatCard key={s.label} num={s.num} unit={s.unit} label={s.label} color={COL(s.color)} />)}
+        {a.stats.map((s, i) => <Stat key={i} s={s} />)}
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
@@ -194,7 +309,7 @@ function ModuleA() {
             color: activeLayer === i ? "#fff" : C.textMuted,
             border: `1px solid ${activeLayer === i ? COL(l.color) : C.border}`,
             borderRadius: 8, padding: "7px 16px", fontSize: 13, cursor: "pointer", fontWeight: activeLayer === i ? 600 : 400
-          }}>{l.label}</button>
+          }}><E o={l} k="label" /></button>
         ))}
       </div>
 
@@ -203,9 +318,9 @@ function ModuleA() {
           {layer.items.map(item => (
             <div key={item.name} style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px" }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: COL(layer.color), flexShrink: 0 }} />{item.name}
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: COL(layer.color), flexShrink: 0 }} /><E o={item} k="name" />
               </div>
-              <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.7 }}>{item.detail}</div>
+              <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.7 }}><E o={item} k="detail" /></div>
             </div>
           ))}
         </div>
@@ -213,34 +328,34 @@ function ModuleA() {
 
       <Divider />
 
-      <SectionHeader {...a.hardware.header} />
+      <SH h={a.hardware.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
         {a.hardware.configs.map(cfg => (
           <Card key={cfg.tier} accent={COL(cfg.accent)} highlight={cfg.highlight}>
-            {cfg.badge && <div style={{ background: COL(cfg.accent), color: "#fff", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, display: "inline-block", marginBottom: 10 }}>{cfg.badge}</div>}
-            <div style={{ fontSize: 15, fontWeight: 700, color: C.navy, marginBottom: 2 }}>{cfg.tier}</div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}>適用：{cfg.forSize}</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: COL(cfg.accent), marginBottom: 14 }}>{cfg.price}</div>
+            {cfg.badge && <div style={{ background: COL(cfg.accent), color: "#fff", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, display: "inline-block", marginBottom: 10 }}><E o={cfg} k="badge" /></div>}
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.navy, marginBottom: 2 }}><E o={cfg} k="tier" /></div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}>適用：<E o={cfg} k="forSize" /></div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: COL(cfg.accent), marginBottom: 14 }}><E o={cfg} k="price" /></div>
             <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 6 }}>硬體配置</div>
-            {cfg.hw.map(h => <div key={h} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>· {h}</div>)}
+            {cfg.hw.map((h, i) => <div key={i} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>· <E o={cfg.hw} k={i} /></div>)}
             <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, margin: "10px 0 6px" }}>軟體 Stack</div>
-            {cfg.sw.map(s => <div key={s} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>· {s}</div>)}
+            {cfg.sw.map((s, i) => <div key={i} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>· <E o={cfg.sw} k={i} /></div>)}
           </Card>
         ))}
       </div>
 
       <Divider />
 
-      <SectionHeader {...a.usecases.header} />
+      <SH h={a.usecases.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
         {a.usecases.items.map(uc => (
           <Card key={uc.name} style={{ padding: "16px 18px" }}>
             <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
               <span style={{ fontSize: 22, flexShrink: 0 }}>{uc.icon}</span>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 4 }}>{uc.name}</div>
-                <p style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.65, margin: "0 0 8px" }}>{uc.desc}</p>
-                <Tag color="teal">{uc.benefit}</Tag>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 4 }}><E o={uc} k="name" /></div>
+                <p style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.65, margin: "0 0 8px" }}><E o={uc} k="desc" /></p>
+                <Tag color="teal"><E o={uc} k="benefit" /></Tag>
               </div>
             </div>
           </Card>
@@ -256,52 +371,52 @@ function ModuleB() {
   const [step, setStep] = useState(0);
   return (
     <div>
-      <SectionHeader {...b.header} />
+      <SH h={b.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
-        {b.stats.map(s => <StatCard key={s.label} num={s.num} unit={s.unit} label={s.label} color={COL(s.color)} />)}
+        {b.stats.map((s, i) => <Stat key={i} s={s} />)}
       </div>
 
       <div style={{ background: C.gray50, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 28 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid, marginBottom: 14 }}>{b.pipelineTitle}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid, marginBottom: 14 }}><E o={b} k="pipelineTitle" /></div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
           {b.pipeline.map((p, i) => (
             <div key={i} onClick={() => setStep(i)} style={{
               background: step === i ? COL(p.color) : "#fff", color: step === i ? "#fff" : C.text,
               border: `1px solid ${step === i ? COL(p.color) : C.border}`, borderRadius: 8, padding: "10px 12px", cursor: "pointer", transition: "all .15s"
             }}>
-              <div style={{ fontSize: 11, opacity: .7, marginBottom: 3 }}>{p.id}</div>
-              <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.4 }}>{p.name}</div>
+              <div style={{ fontSize: 11, opacity: .7, marginBottom: 3 }}><E o={p} k="id" /></div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.4 }}><E o={p} k="name" /></div>
             </div>
           ))}
         </div>
         <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px", marginTop: 14 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: COL(b.pipeline[step].color), marginBottom: 8 }}>{b.pipeline[step].id}｜{b.pipeline[step].name}</div>
-          <div style={{ fontSize: 13.5, color: C.textMuted, lineHeight: 1.7 }}>{b.pipeline[step].detail}</div>
+          <div style={{ fontSize: 13.5, color: C.textMuted, lineHeight: 1.7 }}><E o={b.pipeline[step]} k="detail" /></div>
         </div>
       </div>
 
-      <SectionHeader {...b.toolchain.header} />
+      <SH h={b.toolchain.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginBottom: 28 }}>
         {b.toolchain.cats.map(cat => (
           <Card key={cat.cat} accent={COL(cat.color)}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: COL(cat.color), marginBottom: 12 }}>{cat.cat}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: COL(cat.color), marginBottom: 12 }}><E o={cat} k="cat" /></div>
             {cat.tools.map(t => (
               <div key={t.name} style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.navy }}>{t.name}</div>
-                <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.5 }}>{t.role}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.navy }}><E o={t} k="name" /></div>
+                <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.5 }}><E o={t} k="role" /></div>
               </div>
             ))}
           </Card>
         ))}
       </div>
 
-      <SectionHeader {...b.ops.header} />
+      <SH h={b.ops.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
         {b.ops.steps.map(s => (
           <div key={s.step} style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px" }}>
             <div style={{ width: 28, height: 28, background: COL(s.color), borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{s.step}</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 6 }}>{s.title}</div>
-            <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.65 }}>{s.desc}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 6 }}><E o={s} k="title" /></div>
+            <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.65 }}><E o={s} k="desc" /></div>
           </div>
         ))}
       </div>
@@ -316,48 +431,48 @@ function ModuleC() {
   const tier = m.tiers[activeTier];
   return (
     <div>
-      <SectionHeader {...m.header} />
+      <SH h={m.header} />
       <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
         {m.tiers.map((t, i) => (
           <button key={t.id} onClick={() => setActiveTier(i)} style={{
             background: activeTier === i ? COL(t.color) : "transparent", color: activeTier === i ? "#fff" : C.textMuted,
             border: `1px solid ${activeTier === i ? COL(t.color) : C.border}`, borderRadius: 8, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontWeight: activeTier === i ? 600 : 400
-          }}>{t.title}</button>
+          }}><E o={t} k="title" /></button>
         ))}
       </div>
 
       <div style={{ background: COL(tier.bg), border: `2px solid ${COL(tier.color)}`, borderRadius: 14, padding: "22px 24px", marginBottom: 28 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: COL(tier.color) }}>{tier.title}</div>
-            <div style={{ fontSize: 13, color: C.textMid }}>{tier.sub}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: COL(tier.color) }}><E o={tier} k="title" /></div>
+            <div style={{ fontSize: 13, color: C.textMid }}><E o={tier} k="sub" /></div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: COL(tier.color) }}>{tier.rate}</div>
-            <div style={{ fontSize: 12, color: C.textMuted }}>{tier.months}｜{tier.target}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: COL(tier.color) }}><E o={tier} k="rate" /></div>
+            <div style={{ fontSize: 12, color: C.textMuted }}><E o={tier} k="months" />｜<E o={tier} k="target" /></div>
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>{m.skillsLabel}</div>
-            {tier.skills.map(s => <div key={s} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(tier.color) }}>◆</span>{s}</div>)}
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}><E o={m} k="skillsLabel" /></div>
+            {tier.skills.map((s, i) => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(tier.color) }}>◆</span><E o={tier.skills} k={i} /></div>)}
           </div>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>{m.deliverablesLabel}</div>
-            {tier.deliverables.map(d => <div key={d} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(tier.color) }}>✓</span>{d}</div>)}
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}><E o={m} k="deliverablesLabel" /></div>
+            {tier.deliverables.map((d, i) => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(tier.color) }}>✓</span><E o={tier.deliverables} k={i} /></div>)}
           </div>
         </div>
       </div>
 
-      <SectionHeader {...m.clauses.header} />
+      <SH h={m.clauses.header} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         {m.clauses.items.map(c => (
           <Card key={c.num} accent={COL(c.color)}>
             <div style={{ display: "flex", gap: 12 }}>
               <div style={{ width: 28, height: 28, background: COL(c.color), borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, flexShrink: 0, marginTop: 2 }}>{c.num}</div>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 5 }}>{c.title}</div>
-                <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.65 }}>{c.desc}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 5 }}><E o={c} k="title" /></div>
+                <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.65 }}><E o={c} k="desc" /></div>
               </div>
             </div>
           </Card>
@@ -372,16 +487,16 @@ function Architecture() {
   const ar = D.architecture;
   return (
     <div>
-      <SectionHeader {...ar.header} />
+      <SH h={ar.header} />
       <div style={{ background: C.navy, borderRadius: 14, padding: "24px", marginBottom: 28, color: "#fff" }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,.5)", marginBottom: 16, letterSpacing: ".05em" }}>{ar.diagramTitle}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,.5)", marginBottom: 16, letterSpacing: ".05em" }}><E o={ar} k="diagramTitle" /></div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 2 }}>
           {ar.archCols.map((col, i) => (
             <div key={i} style={{ background: "rgba(255,255,255,.06)", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,.1)" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#5BC4E8", marginBottom: 10 }}>{col.title}</div>
-              {col.items.map(item => (
-                <div key={item} style={{ fontSize: 12, color: "rgba(255,255,255,.75)", lineHeight: 1.8, display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: "rgba(255,255,255,.4)", flexShrink: 0 }} />{item}
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#5BC4E8", marginBottom: 10 }}><E o={col} k="title" /></div>
+              {col.items.map((item, j) => (
+                <div key={j} style={{ fontSize: 12, color: "rgba(255,255,255,.75)", lineHeight: 1.8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: "rgba(255,255,255,.4)", flexShrink: 0 }} /><E o={col.items} k={j} />
                 </div>
               ))}
             </div>
@@ -389,42 +504,42 @@ function Architecture() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, marginTop: 2 }}>
           <div style={{ background: "rgba(29,158,117,.15)", border: "1px solid rgba(29,158,117,.4)", borderRadius: 10, padding: "12px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "#5BC4E8", marginBottom: 8 }}>{ar.fdeLayer.title}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#5BC4E8", marginBottom: 8 }}><E o={ar.fdeLayer} k="title" /></div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {ar.fdeLayer.items.map(i => <span key={i} style={{ background: "rgba(29,158,117,.2)", color: "#9FE1CB", fontSize: 11, padding: "3px 10px", borderRadius: 20 }}>{i}</span>)}
+              {ar.fdeLayer.items.map((it, i) => <span key={i} style={{ background: "rgba(29,158,117,.2)", color: "#9FE1CB", fontSize: 11, padding: "3px 10px", borderRadius: 20 }}><E o={ar.fdeLayer.items} k={i} /></span>)}
             </div>
           </div>
           <div style={{ background: "rgba(216,90,48,.1)", border: "1px solid rgba(216,90,48,.3)", borderRadius: 10, padding: "12px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "#F0997B", marginBottom: 8 }}>{ar.external.title}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#F0997B", marginBottom: 8 }}><E o={ar.external} k="title" /></div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {ar.external.items.map(i => <span key={i} style={{ background: "rgba(216,90,48,.15)", color: "#F0997B", fontSize: 11, padding: "3px 10px", borderRadius: 20 }}>{i}</span>)}
+              {ar.external.items.map((it, i) => <span key={i} style={{ background: "rgba(216,90,48,.15)", color: "#F0997B", fontSize: 11, padding: "3px 10px", borderRadius: 20 }}><E o={ar.external.items} k={i} /></span>)}
             </div>
           </div>
         </div>
       </div>
 
-      <SectionHeader {...ar.dataflow.header} />
+      <SH h={ar.dataflow.header} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 28 }}>
         {ar.dataflow.secs.map(sec => (
           <Card key={sec.title} accent={COL(sec.color)}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 14 }}>{sec.title}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 14 }}><E o={sec} k="title" /></div>
             {sec.levels.map(l => (
               <div key={l.grade} style={{ borderLeft: `3px solid ${COL(sec.color)}`, paddingLeft: 12, marginBottom: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: COL(sec.color) }}>{l.grade}</div>
-                <div style={{ fontSize: 12, color: C.textMuted }}>{l.desc}</div>
-                <div style={{ fontSize: 12, fontWeight: 500, color: C.textMid }}>→ {l.rule}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: COL(sec.color) }}><E o={l} k="grade" /></div>
+                <div style={{ fontSize: 12, color: C.textMuted }}><E o={l} k="desc" /></div>
+                <div style={{ fontSize: 12, fontWeight: 500, color: C.textMid }}>→ <E o={l} k="rule" /></div>
               </div>
             ))}
           </Card>
         ))}
       </div>
 
-      <SectionHeader {...ar.integration.header} />
+      <SH h={ar.integration.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {ar.integration.cats.map(cat => (
           <Card key={cat.name}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 10 }}>{cat.name}</div>
-            {cat.items.map(i => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8 }}>· {i}</div>)}
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 10 }}><E o={cat} k="name" /></div>
+            {cat.items.map((it, i) => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8 }}>· <E o={cat.items} k={i} /></div>)}
           </Card>
         ))}
       </div>
@@ -439,15 +554,15 @@ function Roadmap() {
   const phase = r.phases[activePhase];
   return (
     <div>
-      <SectionHeader {...r.header} />
+      <SH h={r.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 20 }}>
         {r.phases.map((p, i) => (
           <div key={p.id} onClick={() => setActivePhase(i)} style={{
             background: activePhase === i ? COL(p.color) : C.gray50, color: activePhase === i ? "#fff" : C.textMuted,
             border: `1px solid ${activePhase === i ? COL(p.color) : C.border}`, borderRadius: 10, padding: "10px 8px", cursor: "pointer", textAlign: "center"
           }}>
-            <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 3 }}>{p.id}</div>
-            <div style={{ fontSize: 10, opacity: .85 }}>{p.range}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 3 }}><E o={p} k="id" /></div>
+            <div style={{ fontSize: 10, opacity: .85 }}><E o={p} k="range" /></div>
           </div>
         ))}
       </div>
@@ -456,21 +571,21 @@ function Roadmap() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div>
             <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>{phase.id}｜{phase.range}</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: COL(phase.color) }}>{phase.title}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: COL(phase.color) }}><E o={phase} k="title" /></div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 12, color: C.textMid }}>{phase.weeks}｜{phase.fde}</div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{r.hwLabel}{phase.hw}</div>
+            <div style={{ fontSize: 12, color: C.textMid }}><E o={phase} k="weeks" />｜<E o={phase} k="fde" /></div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}><E o={r} k="hwLabel" /><E o={phase} k="hw" /></div>
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>{r.goalsLabel}</div>
-            {phase.goals.map(g => <div key={g} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(phase.color) }}>◆</span>{g}</div>)}
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}><E o={r} k="goalsLabel" /></div>
+            {phase.goals.map((g, i) => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(phase.color) }}>◆</span><E o={phase.goals} k={i} /></div>)}
           </div>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>{r.deliverablesLabel}</div>
-            {phase.deliverables.map(d => <div key={d} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(phase.color) }}>✓</span>{d}</div>)}
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}><E o={r} k="deliverablesLabel" /></div>
+            {phase.deliverables.map((d, i) => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8, display: "flex", gap: 6 }}><span style={{ color: COL(phase.color) }}>✓</span><E o={phase.deliverables} k={i} /></div>)}
           </div>
         </div>
       </div>
@@ -483,7 +598,7 @@ function Roadmap() {
           </div>
           {r.gantt.map(row => (
             <div key={row.label} style={{ display: "grid", gridTemplateColumns: "120px repeat(24, 1fr)", gap: 2, marginBottom: 6 }}>
-              <div style={{ fontSize: 12, color: C.textMuted, display: "flex", alignItems: "center" }}>{row.label}</div>
+              <div style={{ fontSize: 12, color: C.textMuted, display: "flex", alignItems: "center" }}><E o={row} k="label" /></div>
               {Array.from({ length: 24 }, (_, i) => {
                 const seg = row.ranges.findIndex(([s, e]) => i >= s && i < e);
                 return <div key={i} style={{ height: 20, background: seg >= 0 ? COL(row.colors[seg] || row.colors[0]) : C.gray100, borderRadius: 3, opacity: seg >= 0 ? .85 : 1 }} />;
@@ -501,34 +616,34 @@ function Compliance() {
   const cp = D.compliance;
   return (
     <div>
-      <SectionHeader {...cp.header} />
+      <SH h={cp.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginBottom: 28 }}>
         {cp.laws.map(item => (
           <Card key={item.law} accent={COL(item.color)}>
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 14 }}>
               <span style={{ fontSize: 20 }}>{item.icon}</span>
-              <div style={{ fontSize: 14, fontWeight: 600, color: C.navy }}>{item.law}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.navy }}><E o={item} k="law" /></div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, marginBottom: 6 }}>{cp.reqsLabel}</div>
-                {item.reqs.map(r => <div key={r} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.8 }}>· {r}</div>)}
+                <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, marginBottom: 6 }}><E o={cp} k="reqsLabel" /></div>
+                {item.reqs.map((rq, i) => <div key={i} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.8 }}>· <E o={item.reqs} k={i} /></div>)}
               </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: COL(item.color), marginBottom: 6 }}>{cp.howLabel}</div>
-                {item.how.map(h => <div key={h} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.8 }}>✓ {h}</div>)}
+                <div style={{ fontSize: 11, fontWeight: 600, color: COL(item.color), marginBottom: 6 }}><E o={cp} k="howLabel" /></div>
+                {item.how.map((h, i) => <div key={i} style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.8 }}>✓ <E o={item.how} k={i} /></div>)}
               </div>
             </div>
           </Card>
         ))}
       </div>
 
-      <SectionHeader {...cp.ip.header} />
+      <SH h={cp.ip.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {cp.ip.cats.map(cat => (
           <div key={cat.title} style={{ background: COL(cat.color) + "18", border: `1px solid ${COL(cat.color)}44`, borderRadius: 12, padding: "18px 20px" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: COL(cat.color), marginBottom: 12 }}>{cat.title}</div>
-            {cat.items.map(i => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8 }}>· {i}</div>)}
+            <div style={{ fontSize: 14, fontWeight: 600, color: COL(cat.color), marginBottom: 12 }}><E o={cat} k="title" /></div>
+            {cat.items.map((it, i) => <div key={i} style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.8 }}>· <E o={cat.items} k={i} /></div>)}
           </div>
         ))}
       </div>
@@ -541,38 +656,38 @@ function Pricing() {
   const pr = D.pricing;
   return (
     <div>
-      <SectionHeader {...pr.header} />
+      <SH h={pr.header} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14, marginBottom: 32 }}>
         {pr.plans.map(plan => (
           <div key={plan.name} style={{ background: plan.highlight ? C.navy : "#fff", border: `2px solid ${plan.highlight ? C.navy : C.border}`, borderRadius: 14, padding: "20px 18px", display: "flex", flexDirection: "column" }}>
-            {plan.badge && <div style={{ background: C.blue, color: "#fff", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, display: "inline-block", marginBottom: 10, width: "fit-content" }}>{plan.badge}</div>}
-            <div style={{ fontSize: 16, fontWeight: 700, color: plan.highlight ? "#fff" : C.navy }}>{plan.name}</div>
-            <div style={{ fontSize: 12, color: plan.highlight ? "rgba(255,255,255,.6)" : C.textMuted, marginBottom: 8 }}>{plan.sub}</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: plan.highlight ? "#5BC4E8" : COL(plan.color), margin: "4px 0 2px" }}>{plan.price}</div>
-            <div style={{ fontSize: 11, color: plan.highlight ? "rgba(255,255,255,.5)" : C.textMuted, marginBottom: 12 }}>{plan.unit}</div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: plan.highlight ? "rgba(255,255,255,.4)" : C.textMuted, marginBottom: 4 }}>{pr.targetLabel}</div>
-            <div style={{ fontSize: 12, color: plan.highlight ? "rgba(255,255,255,.7)" : C.textMid, marginBottom: 12 }}>{plan.target}</div>
+            {plan.badge && <div style={{ background: C.blue, color: "#fff", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, display: "inline-block", marginBottom: 10, width: "fit-content" }}><E o={plan} k="badge" /></div>}
+            <div style={{ fontSize: 16, fontWeight: 700, color: plan.highlight ? "#fff" : C.navy }}><E o={plan} k="name" /></div>
+            <div style={{ fontSize: 12, color: plan.highlight ? "rgba(255,255,255,.6)" : C.textMuted, marginBottom: 8 }}><E o={plan} k="sub" /></div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: plan.highlight ? "#5BC4E8" : COL(plan.color), margin: "4px 0 2px" }}><E o={plan} k="price" /></div>
+            <div style={{ fontSize: 11, color: plan.highlight ? "rgba(255,255,255,.5)" : C.textMuted, marginBottom: 12 }}><E o={plan} k="unit" /></div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: plan.highlight ? "rgba(255,255,255,.4)" : C.textMuted, marginBottom: 4 }}><E o={pr} k="targetLabel" /></div>
+            <div style={{ fontSize: 12, color: plan.highlight ? "rgba(255,255,255,.7)" : C.textMid, marginBottom: 12 }}><E o={plan} k="target" /></div>
             <div style={{ borderTop: `1px solid ${plan.highlight ? "rgba(255,255,255,.1)" : C.border}`, paddingTop: 12, marginBottom: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: plan.highlight ? "rgba(255,255,255,.4)" : C.textMuted, marginBottom: 6 }}>{pr.includeLabel}</div>
-              {plan.includes.map(i => <div key={i} style={{ fontSize: 11.5, color: plan.highlight ? "rgba(255,255,255,.75)" : C.textMuted, lineHeight: 1.8 }}>✓ {i}</div>)}
+              <div style={{ fontSize: 11, fontWeight: 600, color: plan.highlight ? "rgba(255,255,255,.4)" : C.textMuted, marginBottom: 6 }}><E o={pr} k="includeLabel" /></div>
+              {plan.includes.map((it, i) => <div key={i} style={{ fontSize: 11.5, color: plan.highlight ? "rgba(255,255,255,.75)" : C.textMuted, lineHeight: 1.8 }}>✓ <E o={plan.includes} k={i} /></div>)}
             </div>
             {plan.notInclude.length > 0 && (
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: plan.highlight ? "rgba(255,255,255,.3)" : C.gray400, marginBottom: 4 }}>{pr.notIncludeLabel}</div>
-                {plan.notInclude.map(i => <div key={i} style={{ fontSize: 11, color: plan.highlight ? "rgba(255,255,255,.4)" : C.gray400, lineHeight: 1.8 }}>— {i}</div>)}
+                <div style={{ fontSize: 11, fontWeight: 600, color: plan.highlight ? "rgba(255,255,255,.3)" : C.gray400, marginBottom: 4 }}><E o={pr} k="notIncludeLabel" /></div>
+                {plan.notInclude.map((it, i) => <div key={i} style={{ fontSize: 11, color: plan.highlight ? "rgba(255,255,255,.4)" : C.gray400, lineHeight: 1.8 }}>— <E o={plan.notInclude} k={i} /></div>)}
               </div>
             )}
           </div>
         ))}
       </div>
 
-      <SectionHeader {...pr.addons.header} />
+      <SH h={pr.addons.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {pr.addons.items.map(a => (
           <Card key={a.name}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 3 }}>{a.name}</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.blue, marginBottom: 8 }}>{a.price}</div>
-            <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.65 }}>{a.desc}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 3 }}><E o={a} k="name" /></div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.blue, marginBottom: 8 }}><E o={a} k="price" /></div>
+            <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.65 }}><E o={a} k="desc" /></div>
           </Card>
         ))}
       </div>
@@ -599,32 +714,32 @@ function ROI() {
   const payback = totalCost / (totalBenefit / (b.years * 12));
 
   const costRows = [
-    { label: R.costBox.feeLabel, val: pc.fde, note: R.costBox.feeNote[plan] },
-    { label: R.costBox.hwLabel,  val: pc.hw,  note: R.costBox.hwNote },
-    { label: R.costBox.opsLabel, val: pc.ops, note: R.costBox.opsNote[plan] },
+    { label: <E o={R.costBox} k="feeLabel" />, val: pc.fde, note: <E o={R.costBox.feeNote} k={plan} /> },
+    { label: <E o={R.costBox} k="hwLabel" />,  val: pc.hw,  note: <E o={R.costBox} k="hwNote" /> },
+    { label: <E o={R.costBox} k="opsLabel" />, val: pc.ops, note: <E o={R.costBox.opsNote} k={plan} /> },
   ];
   const benefitVals = [hrSave, qualityGain, onboardSave];
 
   return (
     <div>
-      <SectionHeader {...R.header} />
+      <SH h={R.header} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
         <Card>
-          <label style={{ fontSize: 12, color: C.textMuted, display: "block", marginBottom: 6 }}>{R.controls.sizeLabel}</label>
+          <label style={{ fontSize: 12, color: C.textMuted, display: "block", marginBottom: 6 }}><E o={R.controls} k="sizeLabel" /></label>
           <input type="range" min={P.sizeMin} max={P.sizeMax} step={P.sizeStep} value={size} onChange={e => setSize(+e.target.value)} style={{ width: "100%", marginBottom: 4 }} />
-          <div style={{ fontSize: 18, fontWeight: 700, color: C.blue }}>{size} {R.controls.sizeUnit}</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.blue }}>{size} <E o={R.controls} k="sizeUnit" /></div>
         </Card>
         <Card>
-          <label style={{ fontSize: 12, color: C.textMuted, display: "block", marginBottom: 8 }}>{R.controls.planLabel}</label>
+          <label style={{ fontSize: 12, color: C.textMuted, display: "block", marginBottom: 8 }}><E o={R.controls} k="planLabel" /></label>
           {R.controls.planOptions.map(opt => (
             <label key={opt.value} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, cursor: "pointer" }}>
               <input type="radio" name="plan" value={opt.value} checked={plan === opt.value} onChange={() => setPlan(opt.value)} />
-              <span style={{ fontSize: 13, color: plan === opt.value ? C.blue : C.textMuted, fontWeight: plan === opt.value ? 600 : 400 }}>{opt.label}</span>
+              <span style={{ fontSize: 13, color: plan === opt.value ? C.blue : C.textMuted, fontWeight: plan === opt.value ? 600 : 400 }}><E o={opt} k="label" /></span>
             </label>
           ))}
         </Card>
         <Card>
-          <label style={{ fontSize: 12, color: C.textMuted, display: "block", marginBottom: 8 }}>{R.controls.industryLabel}</label>
+          <label style={{ fontSize: 12, color: C.textMuted, display: "block", marginBottom: 8 }}><E o={R.controls} k="industryLabel" /></label>
           <select value={industry} onChange={e => setIndustry(e.target.value)} style={{ width: "100%", fontSize: 13 }}>
             {R.controls.industryOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
@@ -633,55 +748,55 @@ function ROI() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
         <div style={{ background: C.coralPale, border: `1px solid ${C.coral}44`, borderRadius: 10, padding: "16px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: C.coral, fontWeight: 600, marginBottom: 4 }}>{R.resultLabels.cost}</div>
+          <div style={{ fontSize: 11, color: C.coral, fontWeight: 600, marginBottom: 4 }}><E o={R.resultLabels} k="cost" /></div>
           <div style={{ fontSize: 22, fontWeight: 700, color: "#712B13" }}>NT${totalCost}萬</div>
         </div>
         <div style={{ background: C.tealPale, border: `1px solid ${C.teal}44`, borderRadius: 10, padding: "16px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: C.teal, fontWeight: 600, marginBottom: 4 }}>{R.resultLabels.benefit}</div>
+          <div style={{ fontSize: 11, color: C.teal, fontWeight: 600, marginBottom: 4 }}><E o={R.resultLabels} k="benefit" /></div>
           <div style={{ fontSize: 22, fontWeight: 700, color: "#085041" }}>NT${totalBenefit}萬</div>
         </div>
         <div style={{ background: roi > 0 ? C.tealPale : C.coralPale, border: `1px solid ${roi > 0 ? C.teal : C.coral}44`, borderRadius: 10, padding: "16px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: roi > 0 ? C.teal : C.coral, fontWeight: 600, marginBottom: 4 }}>{R.resultLabels.roi}</div>
+          <div style={{ fontSize: 11, color: roi > 0 ? C.teal : C.coral, fontWeight: 600, marginBottom: 4 }}><E o={R.resultLabels} k="roi" /></div>
           <div style={{ fontSize: 22, fontWeight: 700, color: roi > 0 ? "#085041" : "#712B13" }}>{roi > 0 ? "+" : ""}{roi}%</div>
         </div>
         <div style={{ background: C.bluePale, border: `1px solid ${C.blue}44`, borderRadius: 10, padding: "16px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: C.blue, fontWeight: 600, marginBottom: 4 }}>{R.resultLabels.payback}</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#185FA5" }}>{Math.round(payback)}{R.resultLabels.paybackUnit}</div>
+          <div style={{ fontSize: 11, color: C.blue, fontWeight: 600, marginBottom: 4 }}><E o={R.resultLabels} k="payback" /></div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#185FA5" }}>{Math.round(payback)}<E o={R.resultLabels} k="paybackUnit" /></div>
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 24 }}>
         <Card accent={C.coral}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 14 }}>{R.costBox.title}</div>
-          {costRows.map(i => (
-            <div key={i.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}`, padding: "8px 0" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 14 }}><E o={R.costBox} k="title" /></div>
+          {costRows.map((i, idx) => (
+            <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}`, padding: "8px 0" }}>
               <div><div style={{ fontSize: 13 }}>{i.label}</div><div style={{ fontSize: 11, color: C.textMuted }}>{i.note}</div></div>
               <div style={{ fontSize: 14, fontWeight: 600, color: C.coral }}>NT${i.val}萬</div>
             </div>
           ))}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 0" }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{R.costBox.totalLabel}</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}><E o={R.costBox} k="totalLabel" /></div>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.coral }}>NT${totalCost}萬</div>
           </div>
         </Card>
         <Card accent={C.teal}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 14 }}>{R.benefitBox.title}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.navy, marginBottom: 14 }}><E o={R.benefitBox} k="title" /></div>
           {R.benefitBox.rows.map((i, idx) => (
-            <div key={i.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}`, padding: "8px 0" }}>
-              <div><div style={{ fontSize: 13 }}>{i.label}</div><div style={{ fontSize: 11, color: C.textMuted }}>{i.note}</div></div>
+            <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}`, padding: "8px 0" }}>
+              <div><div style={{ fontSize: 13 }}><E o={i} k="label" /></div><div style={{ fontSize: 11, color: C.textMuted }}><E o={i} k="note" /></div></div>
               <div style={{ fontSize: 14, fontWeight: 600, color: C.teal }}>NT${benefitVals[idx]}萬</div>
             </div>
           ))}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 0" }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{R.benefitBox.totalLabel}</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}><E o={R.benefitBox} k="totalLabel" /></div>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.teal }}>NT${totalBenefit}萬</div>
           </div>
         </Card>
       </div>
 
       <div style={{ background: C.amberPale, border: `1px solid ${C.amber}44`, borderRadius: 12, padding: "16px 20px" }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.amber, marginBottom: 6 }}>{R.disclaimer.title}</div>
-        <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.7 }}>{R.disclaimer.body}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.amber, marginBottom: 6 }}><E o={R.disclaimer} k="title" /></div>
+        <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.7 }}><E o={R.disclaimer} k="body" /></div>
       </div>
     </div>
   );
@@ -715,24 +830,24 @@ function Decision() {
 
   return (
     <div>
-      <SectionHeader {...dc.header} />
+      <SH h={dc.header} />
       <div style={{ background: C.gray50, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 24, display: "flex", alignItems: "center", gap: 14 }}>
         <div style={{ flex: 1, height: 6, background: C.gray200, borderRadius: 3 }}>
           <div style={{ height: "100%", width: `${progress}%`, background: C.blue, borderRadius: 3, transition: "width .3s" }} />
         </div>
-        <div style={{ fontSize: 13, color: C.textMuted, whiteSpace: "nowrap" }}>{answered} / {questions.length} {dc.answeredLabel}</div>
+        <div style={{ fontSize: 13, color: C.textMuted, whiteSpace: "nowrap" }}>{answered} / {questions.length} <E o={dc} k="answeredLabel" /></div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
         {questions.map(q => (
           <Card key={q.id}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 10 }}>{q.q}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 10 }}><E o={q} k="q" /></div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {q.opts.map(([val, label]) => (
-                <button key={val} onClick={() => setAnswers(prev => ({ ...prev, [q.id]: val }))} style={{
-                  background: answers[q.id] === val ? C.blue : "transparent", color: answers[q.id] === val ? "#fff" : C.textMuted,
-                  border: `1px solid ${answers[q.id] === val ? C.blue : C.border}`, borderRadius: 8, padding: "6px 12px", fontSize: 12.5, cursor: "pointer", fontWeight: answers[q.id] === val ? 600 : 400
-                }}>{label}</button>
+              {q.opts.map((opt, oi) => (
+                <button key={oi} onClick={() => setAnswers(prev => ({ ...prev, [q.id]: opt[0] }))} style={{
+                  background: answers[q.id] === opt[0] ? C.blue : "transparent", color: answers[q.id] === opt[0] ? "#fff" : C.textMuted,
+                  border: `1px solid ${answers[q.id] === opt[0] ? C.blue : C.border}`, borderRadius: 8, padding: "6px 12px", fontSize: 12.5, cursor: "pointer", fontWeight: answers[q.id] === opt[0] ? 600 : 400
+                }}><E o={opt} k={1} /></button>
               ))}
             </div>
           </Card>
@@ -750,26 +865,26 @@ function Decision() {
 
       {result && (
         <div style={{ background: C.navy, borderRadius: 14, padding: "24px", color: "#fff" }}>
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,.5)", marginBottom: 16 }}>{dc.resultIntro}</div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,.5)", marginBottom: 16 }}><E o={dc} k="resultIntro" /></div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
             {[
-              { label: dc.cards.plan, detail: dc.planDetails[result.rec], icon: "📦" },
-              { label: dc.cards.deploy, detail: dc.deployDetails[result.deploy], icon: "🏗️" },
-              { label: dc.cards.fde, detail: dc.fdeDetails[result.fde], icon: "👤" },
+              { key: "plan", detail: dc.planDetails[result.rec], icon: "📦" },
+              { key: "deploy", detail: dc.deployDetails[result.deploy], icon: "🏗️" },
+              { key: "fde", detail: dc.fdeDetails[result.fde], icon: "👤" },
             ].map(item => (
-              <div key={item.label} style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 12, padding: "18px" }}>
+              <div key={item.key} style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 12, padding: "18px" }}>
                 <div style={{ fontSize: 20, marginBottom: 8 }}>{item.icon}</div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,.4)", marginBottom: 4 }}>{dc.recLabel}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#5BC4E8", marginBottom: 6 }}>{item.detail.label}</div>
-                {item.detail.price && <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginBottom: 6 }}>{item.detail.price}</div>}
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", lineHeight: 1.6 }}>{item.detail.desc}</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,.4)", marginBottom: 4 }}><E o={dc} k="recLabel" /></div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#5BC4E8", marginBottom: 6 }}><E o={item.detail} k="label" /></div>
+                {item.detail.price && <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginBottom: 6 }}><E o={item.detail} k="price" /></div>}
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", lineHeight: 1.6 }}><E o={item.detail} k="desc" /></div>
               </div>
             ))}
           </div>
           <div style={{ marginTop: 16, padding: "14px 18px", background: "rgba(93,202,165,.12)", border: "1px solid rgba(29,158,117,.3)", borderRadius: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#9FE1CB", marginBottom: 6 }}>{dc.firstStep.title}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#9FE1CB", marginBottom: 6 }}><E o={dc.firstStep} k="title" /></div>
             <div style={{ fontSize: 13, color: "rgba(255,255,255,.7)", lineHeight: 1.6 }}>
-              {dc.firstStep.bodyPre}<strong style={{ color: "#5BC4E8" }}>{dc.firstStep.sprint}</strong>{dc.firstStep.bodyPost}
+              <E o={dc.firstStep} k="bodyPre" /><strong style={{ color: "#5BC4E8" }}><E o={dc.firstStep} k="sprint" /></strong><E o={dc.firstStep} k="bodyPost" />
             </div>
           </div>
           <button onClick={() => { setAnswers({}); setResult(null); }} style={{ background: "transparent", border: "1px solid rgba(255,255,255,.2)", color: "rgba(255,255,255,.6)", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", marginTop: 14 }}>{dc.resetLabel}</button>
@@ -779,18 +894,79 @@ function Decision() {
   );
 }
 
+// ─── 編輯模式工具列（右下角浮動）─────────────────────────────────────────────
+function EditToolbar({ editMode, setEditMode, editCount, onReset }) {
+  const btnBase = { border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", textAlign: "center" };
+  if (!editMode) {
+    return (
+      <div style={{ position: "fixed", right: 18, bottom: 18, zIndex: 100 }}>
+        <button onClick={() => setEditMode(true)} style={{
+          background: C.navy, color: "#fff", border: "none", borderRadius: 30, padding: "11px 18px",
+          fontSize: 13.5, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 16px rgba(10,22,40,.3)", display: "flex", alignItems: "center", gap: 7
+        }}>
+          ✏️ 編輯模式
+          {editCount > 0 && <span style={{ background: C.coral, borderRadius: 20, fontSize: 11, padding: "1px 8px" }}>{editCount}</span>}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ position: "fixed", right: 18, bottom: 18, zIndex: 100, width: 264, background: "#fff", border: `2px solid ${C.blue}`, borderRadius: 14, boxShadow: "0 8px 28px rgba(10,22,40,.22)", padding: "16px 16px 14px" }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.navy, marginBottom: 6 }}>✏️ 編輯模式（開啟中）</div>
+      <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.65, marginBottom: 10 }}>
+        直接<b>點網頁上的文字</b>即可修改，按 Enter 或點別處完成。修改會自動存在<b>這台電腦的瀏覽器</b>，其他人看不到。
+      </div>
+      <div style={{ fontSize: 12, color: editCount > 0 ? "#085041" : C.gray400, background: editCount > 0 ? C.tealPale : C.gray50, borderRadius: 8, padding: "7px 10px", marginBottom: 10, textAlign: "center" }}>
+        {editCount > 0 ? `已修改 ${editCount} 處（已自動儲存）` : "尚未修改任何文字"}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <button onClick={exportContentJs} style={{ ...btnBase, background: C.blue, color: "#fff" }}>⬇️ 匯出 content.js</button>
+        <a href="https://github.com/benchou66/delivery-intelligence-service/upload/main" target="_blank" rel="noopener"
+           style={{ ...btnBase, background: C.gray100, color: C.textMid, textDecoration: "none", display: "block" }}>↗ 開啟 GitHub 上傳頁</a>
+        <button onClick={onReset} disabled={editCount === 0} style={{ ...btnBase, background: "transparent", color: editCount > 0 ? C.coral : C.gray400, border: `1px solid ${editCount > 0 ? C.coral : C.border}`, cursor: editCount > 0 ? "pointer" : "default" }}>↺ 還原全部修改</button>
+        <button onClick={() => setEditMode(false)} style={{ ...btnBase, background: C.navy, color: "#fff" }}>✅ 完成編輯</button>
+      </div>
+      <div style={{ fontSize: 10.5, color: C.gray400, lineHeight: 1.6, marginTop: 10 }}>
+        要正式發佈：先「匯出」下載檔案，再到 GitHub 上傳頁拖入取代原檔。上傳成功後請按「還原」清掉本機暫存。
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ────────────────────────────────────────────────────────────────
 function App() {
   const [active, setActive] = useState("overview");
+  const [editMode, setEditMode] = useState(false);
+  const [editCount, setEditCount] = useState(Object.keys(OVERRIDES).length);
+
+  const save = (path, text) => {
+    persistEdit(path, text);
+    setEditCount(Object.keys(OVERRIDES).length);
+  };
+  const reset = () => {
+    if (!window.confirm("確定要還原全部修改嗎？此瀏覽器儲存的所有編輯將被清除（已匯出的檔案不受影響）。")) return;
+    localStorage.removeItem(LS_KEY);
+    location.reload();
+  };
+
   const PANELS = { overview: Overview, moduleA: ModuleA, moduleB: ModuleB, moduleC: ModuleC, architecture: Architecture, roadmap: Roadmap, compliance: Compliance, pricing: Pricing, roi: ROI, decision: Decision };
   const Panel = PANELS[active] || Overview;
+
   return (
-    <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: 900, margin: "0 auto", background: "#fff" }}>
-      <Nav active={active} setActive={setActive} />
-      <div style={{ padding: "28px 24px 48px" }}>
-        <Panel />
+    <EditCtx.Provider value={{ on: editMode, save }}>
+      <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: 900, margin: "0 auto", background: "#fff" }}>
+        {editMode && (
+          <div style={{ position: "sticky", top: 0, zIndex: 11, background: "#FFF3D6", borderBottom: `1px solid ${C.amber}55`, padding: "7px 16px", fontSize: 12.5, color: "#633806", textAlign: "center" }}>
+            ✏️ 編輯模式開啟中 — 點文字即可修改；點按鈕的空白邊緣仍可切換分頁
+          </div>
+        )}
+        <Nav active={active} setActive={setActive} />
+        <div style={{ padding: "28px 24px 48px" }}>
+          <Panel />
+        </div>
+        <EditToolbar editMode={editMode} setEditMode={setEditMode} editCount={editCount} onReset={reset} />
       </div>
-    </div>
+    </EditCtx.Provider>
   );
 }
 
